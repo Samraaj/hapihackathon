@@ -1,8 +1,3 @@
----
-
-
----
-
 <h1 id="hapi---please-hack-us">Hapi - Please Hack Us!</h1>
 <p>Hapi Finance is a new project by <a href="https://twitter.com/sathaxe">@sathaxe</a> and <a href="https://twitter.com/TheBathman_">@TheBathman_</a>. We’re in the early days of building estate management for ethereum wallets. Have you ever wondered what would happen to all of your tokens and NFTs if you died? We want to make sure your loved ones inherit your assets in this sad turn of events!</p>
 <p>We’re providing this early look at our smart contracts so that you can try and poke holes in them and provide feedback.</p>
