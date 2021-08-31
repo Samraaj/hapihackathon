@@ -42,7 +42,7 @@ If you didn’t know, [Hapi](https://en.wikipedia.org/wiki/Hapi_%28Son_of_Horus%
 ## Submissions
 
 1. Please follow and DM *Hapi Twitter account* with any exploits you have found.
-2. We will 
+2. We will regularly check if the jars have been found and announce an airdrop date from our Twitter account. We will send the rewards to the same addresses that are holding the jars on mainnent.
 
 
 
