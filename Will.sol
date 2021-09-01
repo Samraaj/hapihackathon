@@ -62,6 +62,12 @@ contract Will {
      * @param tokenAddress address of the token being added.
      */
     function addSupportedToken(address tokenAddress) public {
+        // Check if the address is a smartcontract
+        require(
+            isContract(tokenAddress),
+            "The address you have inputted is not a contract."
+        );
+
         /// Ensure that the token isn't already supported
         for (uint256 i = 0; i < supportedTokens.length; i++) {
             require(
@@ -69,7 +75,6 @@ contract Will {
                 "This token is already supported!"
             );
         }
-
         supportedTokens.push(tokenAddress);
         emit tokenAddedToWill(tokenAddress);
     }
@@ -205,10 +210,17 @@ contract Will {
         // Loop through the ERC20 assets the estateHolder owns, transfer
         for (uint256 i = 0; i < supportedTokens.length; i++) {
             // get the token, check the allowance and balance
-            splitTokenForBeneficiaries(
+            bool tokenSuccessful = splitTokenForBeneficiaries(
                 IERC20(supportedTokens[i]),
                 estateHolder
             );
+
+            // remove the element from the array if no longer necessary
+            if (!tokenSuccessful) {
+                removeSupportedToken(i);
+                // now that this element is removed, off by one.
+                i--;
+            }
         }
 
         emit holderDiedAndTokensTransferred(estateHolder);
@@ -220,32 +232,70 @@ contract Will {
      * @dev this function is only called by transferIfDead.
      * @param token the address of the token to split.
      * @param estateHolder the address of the estate holder.
+     * @return bool if false, the token does not support IERC20, pop it from supported list
      */
     function splitTokenForBeneficiaries(IERC20 token, address estateHolder)
         private
+        returns (bool)
     {
-        uint256 allowance = token.allowance(estateHolder, address(this));
-        uint256 balance = token.balanceOf(estateHolder);
+        try token.allowance(estateHolder, address(this)) returns (
+            uint256 allowance
+        ) {
+            try token.balanceOf(estateHolder) returns (uint256 balance) {
+                // External calls succeeded, proceed.
+                // If the estate holder does not have this token or has not given the contract allowance, skip
+                if (allowance == 0 || balance == 0) return true;
 
-        // If the estate holder does not have this token or has not given the contract allowance, skip
-        if (allowance == 0 || balance == 0) return;
+                // The value that gets sent should be the lower of allowance and balance
+                if (balance < allowance) {
+                    allowance = balance;
+                }
 
-        // The value that gets sent should be the lower of allowance and balance
-        if (balance < allowance) {
-            allowance = balance;
+                // Run through the beneficiaries and accordingly split up the assets
+                for (
+                    uint256 i = 0;
+                    i < beneficiaries[estateHolder].length;
+                    i++
+                ) {
+                    uint256 splitTransferAmount = (beneficiaries[estateHolder][
+                        i
+                    ].split * allowance) / (10000);
+
+                    // Execute transferFrom
+                    try
+                        token.transferFrom(
+                            estateHolder,
+                            beneficiaries[estateHolder][i].beneficiaryAddress,
+                            splitTransferAmount
+                        )
+                    {} catch {
+                        return false;
+                    }
+                }
+            } catch {
+                return false;
+            }
+        } catch {
+            return false;
         }
 
-        // Run through the beneficiaries and accordingly split up the assets
-        for (uint256 i = 0; i < beneficiaries[estateHolder].length; i++) {
-            uint256 splitTransferAmount = (beneficiaries[estateHolder][i]
-                .split * allowance) / (10000);
+        return true;
+    }
 
-            // Execute transferFrom
-            token.transferFrom(
-                estateHolder,
-                beneficiaries[estateHolder][i].beneficiaryAddress,
-                splitTransferAmount
-            );
+    function removeSupportedToken(uint256 index) private {
+        if (index >= supportedTokens.length) return;
+
+        for (uint256 i = index; i < supportedTokens.length - 1; i++) {
+            supportedTokens[i] = supportedTokens[i + 1];
         }
+        supportedTokens.pop();
+    }
+
+    function isContract(address _addr) private view returns (bool) {
+        uint32 size;
+        assembly {
+            size := extcodesize(_addr)
+        }
+        return (size > 0);
     }
 }
