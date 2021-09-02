@@ -4,15 +4,10 @@
 pragma solidity >=0.7.0 <0.9.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
 /** @title Will */
-contract Will {
-    /// Owner address to confirm some calls
-    address owner_;
-
-    /// The set of the contract's supported tokens to transfer
-    address[] supportedTokens;
-
+contract Will is Ownable {
     struct Beneficiary {
         address beneficiaryAddress;
         uint256 split; /// multiplied by 10000 (4 decimal point accuracy) - so 0.25 split is 2500
@@ -25,97 +20,31 @@ contract Will {
     mapping(address => uint256) cadences;
     mapping(address => uint256) lastCheckIn;
 
-    /// Events
-    event initialized(address sender, address beneficiary, uint256 cadence);
-    event revoked(address sender);
-    event beneficiariesUpdated(address[] addresses, uint256[] splits);
-    event tokenAddedToWill(address tokenAddress);
-    event holderDiedAndTokensTransferred(address estateHolder);
-
-    constructor() {
-        owner_ = msg.sender;
-    }
-
-    ///View only functions, some with restrictions
-
-    /** @notice Returns the time since the last checkin of `estateHolder`
-     * @param estateHolder estate holder's address.
-     * @return time since last checkin.
-     */
-    function timeSinceLastCheckin(address estateHolder)
-        public
-        view
-        returns (uint256)
-    {
-        require(
-            msg.sender == owner_,
-            "This function is only supported by the contract owner"
-        );
-        if (lastCheckIn[estateHolder] == 0) {
-            return 0;
-        }
-        return (block.timestamp - lastCheckIn[estateHolder]);
-    }
-
-    /** @notice Adds `tokenAddress` to the global list of supported tokens.
-     * @dev TODO an infinite number of addresses can be added via this method - is that okay?
-     * @param tokenAddress address of the token being added.
-     */
-    function addSupportedToken(address tokenAddress) public {
-        // Check if the address is a smartcontract
-        require(
-            isContract(tokenAddress),
-            "The address you have inputted is not a contract."
-        );
-
-        /// Ensure that the token isn't already supported
-        for (uint256 i = 0; i < supportedTokens.length; i++) {
-            require(
-                tokenAddress != supportedTokens[i],
-                "This token is already supported!"
-            );
-        }
-        supportedTokens.push(tokenAddress);
-        emit tokenAddedToWill(tokenAddress);
-    }
-
-    /** @notice checks of the sender is an estate holder.
-     * @return bool if the sender is an estate holder or noot.
-     */
-    function isEstateHolder() public view returns (bool) {
-        return beneficiaries[msg.sender].length != 0;
-    }
-
-    /** @notice the estate owner can get a list of their beneficiaries.
-     * @return list of the sender's beneficiaries.
-     */
-    function getBeneficiaryInfo() public view returns (Beneficiary[] memory) {
-        return beneficiaries[msg.sender];
-    }
-
-    /// Estate modification functions
+    /// Estate modification functions, limited to the estate holder
 
     /** @notice creates an estate going to `beneficiary` and sets the checkin cadence of `cadence`
      */
-    function initialize(address beneficiary, uint256 cadence) public {
+    function initializeEstate(address beneficiary, uint256 cadence) public {
+        require(
+            beneficiaries[msg.sender].length == 0,
+            "This sender already has an estate initialized"
+        );
+        require(
+            cadence >= 60,
+            "Cadence must be greater than 1 minute (60 seconds)"
+        );
         beneficiaries[msg.sender].push(Beneficiary(beneficiary, 10000));
         lastCheckIn[msg.sender] = block.timestamp;
         cadences[msg.sender] = cadence;
-        emit initialized(msg.sender, beneficiary, cadence);
     }
 
     /** @notice If an estate exists this removes all info from this contract.
      * @dev This does not revoke approve individual token permissions for this contract.
      */
-    function revoke() public {
-        require(
-            beneficiaries[msg.sender].length != 0,
-            "No estate exists for this sender."
-        );
+    function revoke() public onlyEstateHolder {
         delete beneficiaries[msg.sender];
         lastCheckIn[msg.sender] = 0;
         cadences[msg.sender] = 0;
-        emit revoked(msg.sender);
     }
 
     /** @notice Replaces beneficiaries and splits for the sender's estate.
@@ -126,11 +55,7 @@ contract Will {
     function updateBeneficiaries(
         address[] calldata newAddresses,
         uint256[] calldata newSplits
-    ) public {
-        require(
-            beneficiaries[msg.sender].length != 0,
-            "No estate exists for this sender."
-        );
+    ) public onlyEstateHolder {
         require(
             newAddresses.length == newSplits.length,
             "There must be the same number of beneficiaries and splits"
@@ -162,20 +87,18 @@ contract Will {
             );
         }
 
-        emit beneficiariesUpdated(newAddresses, newSplits);
-
         /// check the user in
         lastCheckIn[msg.sender] = block.timestamp;
     }
 
     /** @notice Updates the sender's checkin cadence.
-     * @dev Requires that the sender has run initialize() in the past.
+     * @dev Requires that the sender has run initializeEstate() in the past.
      * @param cadence the checkin cadence in seconds.
      */
-    function updateCadence(uint256 cadence) public {
+    function updateCadence(uint256 cadence) public onlyEstateHolder {
         require(
-            beneficiaries[msg.sender].length != 0,
-            "No estate exists for this sender, please start by calling 'initialize()'"
+            cadence >= 60,
+            "Cadence must be greater than 1 minute (60 seconds)"
         );
         cadences[msg.sender] = cadence;
         lastCheckIn[msg.sender] = block.timestamp;
@@ -183,68 +106,132 @@ contract Will {
 
     /** @notice Allows the sender to checkin.
      * @dev TODO do we need more protection around time?
-     * @dev Requires that the sender has run initialize() in the past.
+     * @dev Requires that the sender has run initializeEstate() in the past.
      */
-    function checkin() public {
-        require(
-            beneficiaries[msg.sender].length != 0,
-            "No estate exists for this sender, please start by calling 'initialize()'"
-        );
+    function checkin() public onlyEstateHolder {
         lastCheckIn[msg.sender] = block.timestamp;
     }
 
+    /// Estate holder view only functions
+
+    /** @notice Returns the time since the last checkin of `msg.sender`
+     * @return time since last checkin.
+     */
+    function getTimeSinceLastCheckin()
+        public
+        view
+        onlyEstateHolder
+        returns (uint256)
+    {
+        uint256 lastCheckInMem = lastCheckIn[msg.sender];
+        if (lastCheckInMem == 0) {
+            return 0;
+        }
+        return (block.timestamp - lastCheckInMem);
+    }
+
+    /** @notice checks of the sender is an estate holder.
+     * @return bool if the sender is an estate holder or noot.
+     */
+    function isEstateHolder() public view returns (bool) {
+        return beneficiaries[msg.sender].length != 0;
+    }
+
+    /** @notice the estate owner can get a list of their beneficiaries.
+     * @return list of the sender's beneficiaries.
+     */
+    function getBeneficiaries()
+        public
+        view
+        onlyEstateHolder
+        returns (Beneficiary[] memory)
+    {
+        return beneficiaries[msg.sender];
+    }
+
+    /// CONTRACT OWNER ONLY view functions for convenience in web2
+
+    /** @notice Gets a set of beneficiaries, restricted to the owner of contract
+     * @param estateHolder owner of estate
+     */
+    function getBeneficiariesOwner(address estateHolder)
+        public
+        view
+        onlyOwner
+        returns (Beneficiary[] memory)
+    {
+        return beneficiaries[estateHolder];
+    }
+
+    /** @notice Checks the estate's checkin cadence, restricted to owner of contract
+     * @param estateHolder owner of estate
+     */
+    function getCadenceOwner(address estateHolder)
+        public
+        view
+        onlyOwner
+        returns (uint256)
+    {
+        return cadences[estateHolder];
+    }
+
+    /** @notice Checks how long it has been since the last checkin, restricted to owner of contract
+     * @param estateHolder owner of estate
+     */
+    function getTimeSinceLastCheckinOwner(address estateHolder)
+        public
+        view
+        onlyOwner
+        returns (uint256)
+    {
+        return lastCheckIn[estateHolder];
+    }
+
+    /// Public functions that can be called by anyone
+
     /** @notice Transfers the estate to beneficiaries if the estate holder is dead.
-     * @dev TODO do we need more protections around checkins? This must be a public function.
      * @param estateHolder the estate that will be distributed.
      */
-    function transferIfDead(address estateHolder) public {
+    function transferIfDead(address estateHolder, address[] calldata tokens)
+        public
+    {
         // ensure user is an estate holder, fail if not
         require(
             beneficiaries[estateHolder].length != 0,
-            "No estate exists for the specified address. Please start by having them call 'initialize()'"
+            "No estate exists for the specified address. Please start by having them call 'initializeEstate()'"
         );
         // Check timing, fail if the user has checked in within their cadence
         uint256 diff = block.timestamp - lastCheckIn[estateHolder];
         require(diff > cadences[estateHolder], "estate holder isn't dead!");
 
         // Loop through the ERC20 assets the estateHolder owns, transfer
-        for (uint256 i = 0; i < supportedTokens.length; i++) {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            //
             // get the token, check the allowance and balance
-            bool tokenSuccessful = splitTokenForBeneficiaries(
-                IERC20(supportedTokens[i]),
-                estateHolder
-            );
-
-            // remove the element from the array if no longer necessary
-            if (!tokenSuccessful) {
-                removeSupportedToken(i);
-                // now that this element is removed, off by one.
-                i--;
-            }
+            splitTokenForBeneficiaries(tokens[i], estateHolder);
         }
-
-        emit holderDiedAndTokensTransferred(estateHolder);
     }
 
     /// Private Functions
 
     /** @notice Splits the tokens from the estate to the beneficiaries according to will.
      * @dev this function is only called by transferIfDead.
-     * @param token the address of the token to split.
+     * @param tokenAddress the address of the token to split.
      * @param estateHolder the address of the estate holder.
-     * @return bool if false, the token does not support IERC20, pop it from supported list
      */
-    function splitTokenForBeneficiaries(IERC20 token, address estateHolder)
-        private
-        returns (bool)
-    {
+    function splitTokenForBeneficiaries(
+        address tokenAddress,
+        address estateHolder
+    ) private {
+        if (!isContract(tokenAddress)) return;
+        IERC20 token = IERC20(tokenAddress);
         try token.allowance(estateHolder, address(this)) returns (
             uint256 allowance
         ) {
             try token.balanceOf(estateHolder) returns (uint256 balance) {
                 // External calls succeeded, proceed.
                 // If the estate holder does not have this token or has not given the contract allowance, skip
-                if (allowance == 0 || balance == 0) return true;
+                if (allowance == 0 || balance == 0) return;
 
                 // The value that gets sent should be the lower of allowance and balance
                 if (balance < allowance) {
@@ -269,33 +256,38 @@ contract Will {
                             splitTransferAmount
                         )
                     {} catch {
-                        return false;
+                        return;
                     }
                 }
             } catch {
-                return false;
+                return;
             }
         } catch {
-            return false;
+            return;
         }
-
-        return true;
     }
 
-    function removeSupportedToken(uint256 index) private {
-        if (index >= supportedTokens.length) return;
-
-        for (uint256 i = index; i < supportedTokens.length - 1; i++) {
-            supportedTokens[i] = supportedTokens[i + 1];
-        }
-        supportedTokens.pop();
-    }
-
+    /** @notice Checks if the inputted address is a contract or not - to prevent failure.
+     * @dev this function is only called by transferIfDead.
+     * @param _addr the address of the token to split.
+     */
     function isContract(address _addr) private view returns (bool) {
         uint32 size;
         assembly {
             size := extcodesize(_addr)
         }
         return (size > 0);
+    }
+
+    /// Modifiers
+
+    /** @notice Executes to restrict methods to estate holder only
+     */
+    modifier onlyEstateHolder() {
+        require(
+            beneficiaries[msg.sender].length != 0,
+            "No estate exists for this sender, please start by calling 'initializeEstate()'"
+        );
+        _;
     }
 }
